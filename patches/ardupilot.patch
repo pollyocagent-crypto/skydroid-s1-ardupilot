@@ -1,0 +1,144 @@
+diff --git a/ArduPlane/Plane.cpp b/ArduPlane/Plane.cpp
+index 6cc6205..064a419 100644
+--- a/ArduPlane/Plane.cpp
++++ b/ArduPlane/Plane.cpp
+@@ -22,6 +22,16 @@
+ 
+ #include "Plane.h"
+ 
++#if defined(BOARD_OTG_NOVBUSSENS) && defined(STM32H743xx)
++#include <hal.h>
++extern "C" volatile uint32_t s1_usb_events[7];
++extern "C" volatile uint32_t s1_usb_descriptors;
++extern "C" volatile uint32_t s1_usb_setup_count;
++extern "C" volatile uint32_t s1_usb_setup_bytes;
++extern "C" volatile uint32_t s1_usb_setup_data;
++extern "C" volatile uint32_t s1_usb_setup_done;
++#endif
++
+ #define FORCE_VERSION_H_INCLUDE
+ #include "version.h"
+ #undef FORCE_VERSION_H_INCLUDE
+@@ -361,6 +371,26 @@ extern AP_IOMCU iomcu;
+ 
+ void Plane::one_second_loop()
+ {
++
++#if defined(BOARD_OTG_NOVBUSSENS) && defined(STM32H743xx)
++    const stm32_otg_t &otg = *USBD1.otg;
++    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "USB reset=%lu addr=%lu cfg=%lu desc=%lu",
++                  s1_usb_events[0], s1_usb_events[1], s1_usb_events[2], s1_usb_descriptors);
++    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "USB DSTS=%08lx DCFG=%08lx PWR=%08lx",
++                  otg.DSTS, otg.DCFG, PWR->CR3);
++    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "USB STAT=%08lx MASK=%08lx GOTG=%08lx",
++                  otg.GINTSTS, otg.GINTMSK, otg.GOTGCTL);
++    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "USB pins=%08lx AFR=%08lx clock=%08lx",
++                  GPIOA->MODER, GPIOA->AFRH, RCC->D2CCIP2R);
++    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "USB suspended=%lu awakened=%lu state=%u",
++                  s1_usb_events[4], s1_usb_events[5], unsigned(USBD1.state));
++    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "USB EP0 ctl=%08lx int=%08lx size=%08lx",
++                  otg.oe[0].DOEPCTL, otg.oe[0].DOEPINT, otg.oe[0].DOEPTSIZ);
++    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "USB SETUP count=%lu last=%08lx",
++                  s1_usb_setup_count, s1_usb_setup_bytes);
++    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "USB FIFO setup=%lu complete=%lu",
++                  s1_usb_setup_data, s1_usb_setup_done);
++#endif
+     // make it possible to change control channel ordering at runtime
+     set_control_channels();
+ 
+diff --git a/libraries/AP_HAL_ChibiOS/UARTDriver.cpp b/libraries/AP_HAL_ChibiOS/UARTDriver.cpp
+index b2cea4e..d485199 100644
+--- a/libraries/AP_HAL_ChibiOS/UARTDriver.cpp
++++ b/libraries/AP_HAL_ChibiOS/UARTDriver.cpp
+@@ -1820,6 +1820,11 @@ void usb_initialise(void)
+     usbDisconnectBus(serusbcfg1.usbp);
+     chThdSleep(chTimeUS2I(1500));
+     usbStart(serusbcfg1.usbp, &usbcfg);
++#if defined(BOARD_OTG_NOVBUSSENS) && defined(STM32H743xx)
++    // Bench experiment: let the OTG core settle before exposing the pull-up.
++    usbDisconnectBus(serusbcfg1.usbp);
++    chThdSleep(chTimeMS2I(100));
++#endif
+     usbConnectBus(serusbcfg1.usbp);
+ }
+ #endif
+diff --git a/libraries/AP_HAL_ChibiOS/hwdef/common/chibios_board.mk b/libraries/AP_HAL_ChibiOS/hwdef/common/chibios_board.mk
+index 1bf7bb9..c46bf68 100644
+--- a/libraries/AP_HAL_ChibiOS/hwdef/common/chibios_board.mk
++++ b/libraries/AP_HAL_ChibiOS/hwdef/common/chibios_board.mk
+@@ -128,6 +128,11 @@ endif
+ 
+ CSRC = $(sort $(ALLCSRC))
+ 
++ifeq ($(HAL_BOARD_NAME),skydroid-s1)
++# Compile the S1 bench OTG diagnostic driver in place of the stock LLD.
++CSRC := $(filter-out %/hal_usb_lld.c,$(CSRC)) $(HWDEF)/skydroid-s1/hal_usb_lld.c
++endif
++
+ CSRC += $(HWDEF)/common/stubs.c \
+         $(HWDEF)/common/board.c \
+         $(HWDEF)/common/usbcfg.c \
+diff --git a/libraries/AP_HAL_ChibiOS/hwdef/common/usbcfg.c b/libraries/AP_HAL_ChibiOS/hwdef/common/usbcfg.c
+index e734179..4f59fe7 100644
+--- a/libraries/AP_HAL_ChibiOS/hwdef/common/usbcfg.c
++++ b/libraries/AP_HAL_ChibiOS/hwdef/common/usbcfg.c
+@@ -218,11 +218,21 @@ void setup_usb_strings(void)
+  * Handles the GET_DESCRIPTOR callback. All required descriptors must be
+  * handled here.
+  */
++#if defined(BOARD_OTG_NOVBUSSENS) && defined(STM32H743xx)
++volatile uint32_t s1_usb_events[7];
++volatile uint32_t s1_usb_descriptors;
++volatile uint32_t s1_usb_setup_count;
++volatile uint32_t s1_usb_setup_bytes;
++#endif
++
+ static const USBDescriptor *get_descriptor(USBDriver *usbp,
+                                            uint8_t dtype,
+                                            uint8_t dindex,
+                                            uint16_t lang) {
+ 
++#if defined(BOARD_OTG_NOVBUSSENS) && defined(STM32H743xx)
++  ++s1_usb_descriptors;
++#endif
+   (void)usbp;
+   (void)lang;
+   switch (dtype) {
+@@ -315,6 +325,11 @@ static const USBEndpointConfig ep2config = {
+  * Handles the USB driver global events.
+  */
+ static void usb_event(USBDriver *usbp, usbevent_t event) {
++#if defined(BOARD_OTG_NOVBUSSENS) && defined(STM32H743xx)
++  if ((unsigned)event < 7) {
++    ++s1_usb_events[event];
++  }
++#endif
+   extern SerialUSBDriver SDU1;
+ 
+   switch (event) {
+@@ -335,6 +350,13 @@ static void usb_event(USBDriver *usbp, usbevent_t event) {
+     chSysUnlockFromISR();
+     return;
+   case USB_EVENT_RESET:
++#if defined(BOARD_OTG_NOVBUSSENS) && defined(STM32H743xx)
++    // Explicitly arm EP0 OUT for the first control SETUP after a bus reset.
++    usbp->otg->oe[0].DOEPTSIZ = DOEPTSIZ_STUPCNT(3) |
++        DOEPTSIZ_PKTCNT(1) | DOEPTSIZ_XFRSIZ(24);
++    usbp->otg->oe[0].DOEPCTL |= DOEPCTL_EPENA | DOEPCTL_CNAK;
++    __attribute__((fallthrough));
++#endif
+     /* Falls into.*/
+   case USB_EVENT_UNCONFIGURED:
+     /* Falls into.*/
+@@ -365,6 +387,11 @@ static void usb_event(USBDriver *usbp, usbevent_t event) {
+  * SerialUSB handler.
+  */
+ static bool requests_hook(USBDriver *usbp) {
++#if defined(BOARD_OTG_NOVBUSSENS) && defined(STM32H743xx)
++  ++s1_usb_setup_count;
++  s1_usb_setup_bytes = ((uint32_t)usbp->setup[0] << 24) | ((uint32_t)usbp->setup[1] << 16) |
++      ((uint32_t)usbp->setup[2] << 8) | usbp->setup[3];
++#endif
+   if (((usbp->setup[0] & USB_RTYPE_RECIPIENT_MASK) == USB_RTYPE_RECIPIENT_INTERFACE) &&
+       (usbp->setup[1] == USB_REQ_SET_INTERFACE)) {
+     usbSetupTransfer(usbp, NULL, 0, NULL);

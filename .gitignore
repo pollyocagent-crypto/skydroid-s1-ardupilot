@@ -1,0 +1,6 @@
+/.venv/
+/ardupilot/
+/artifacts/
+*.apj
+*.BIN
+__pycache__/
